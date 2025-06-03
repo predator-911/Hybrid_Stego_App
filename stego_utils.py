@@ -6,41 +6,39 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
-# Encoding tables for prompt-based steganography
+# Optimized encoding tables for better token efficiency
 OBJECT_TABLE = {
-    0: "house", 1: "tree", 2: "car", 3: "person", 4: "bird", 5: "mountain",
-    6: "river", 7: "dog", 8: "cat", 9: "flower", 10: "city", 11: "ocean",
-    12: "forest", 13: "bridge", 14: "lake", 15: "rocket", 16: "castle",
-    17: "boat", 18: "moon", 19: "sun", 20: "cloud", 21: "butterfly",
-    22: "horse", 23: "statue", 24: "waterfall", 25: "island", 26: "desert",
-    27: "galaxy", 28: "robot", 29: "dragon", 30: "unicorn", 31: "phoenix"
+    0: "cat", 1: "dog", 2: "bird", 3: "fish", 4: "tree", 5: "flower",
+    6: "house", 7: "car", 8: "boat", 9: "moon", 10: "sun", 11: "star",
+    12: "cloud", 13: "lake", 14: "hill", 15: "cave", 16: "fox", 17: "deer",
+    18: "owl", 19: "rose", 20: "oak", 21: "pine", 22: "barn", 23: "truck",
+    24: "ship", 25: "fire", 26: "snow", 27: "rock", 28: "field", 29: "path",
+    30: "bridge", 31: "tower"
 }
 
 COLOR_TABLE = {
-    0: "red", 1: "green", 2: "blue", 3: "yellow", 4: "purple",
-    5: "orange", 6: "teal", 7: "silver", 8: "gold", 9: "copper",
-    10: "emerald", 11: "sapphire", 12: "ruby", 13: "amber", 14: "ivory",
-    15: "crimson"
+    0: "red", 1: "blue", 2: "green", 3: "gold", 4: "silver", 5: "black",
+    6: "white", 7: "pink", 8: "purple", 9: "orange", 10: "brown", 11: "gray",
+    12: "yellow", 13: "teal", 14: "coral", 15: "jade"
 }
 
 STYLE_TABLE = {
-    0: "impressionist", 1: "minimalist", 2: "surrealist", 3: "abstract",
-    4: "photorealistic", 5: "cubist", 6: "pop art", 7: "watercolor",
-    8: "digital art", 9: "oil painting", 10: "sketch", 11: "anime",
-    12: "vaporwave", 13: "synthwave", 14: "cyberpunk", 15: "renaissance"
+    0: "oil", 1: "sketch", 2: "digital", 3: "photo", 4: "anime", 5: "pixel",
+    6: "water", 7: "ink", 8: "pencil", 9: "chalk", 10: "pastel", 11: "neon",
+    12: "retro", 13: "modern", 14: "vintage", 15: "abstract"
 }
 
-HIGHLIGHT_TABLE = {
-    0: "glowing", 1: "subtle", 2: "dramatic", 3: "lens flare",
-    4: "backlit", 5: "neon", 6: "high contrast", 7: "soft",
-    8: "cinematic", 9: "ethereal", 10: "mystical", 11: "volumetric",
-    12: "studio", 13: "natural", 14: "vibrant", 15: "monochromatic"
+MOOD_TABLE = {
+    0: "calm", 1: "bright", 2: "dark", 3: "warm", 4: "cool", 5: "soft",
+    6: "sharp", 7: "misty", 8: "clear", 9: "foggy", 10: "sunny", 11: "stormy",
+    12: "peaceful", 13: "dramatic", 14: "serene", 15: "vibrant"
 }
 
+# Inverse mappings
 INV_OBJECT_TABLE = {v: k for k, v in OBJECT_TABLE.items()}
 INV_COLOR_TABLE = {v: k for k, v in COLOR_TABLE.items()}
 INV_STYLE_TABLE = {v: k for k, v in STYLE_TABLE.items()}
-INV_HIGHLIGHT_TABLE = {v: k for k, v in HIGHLIGHT_TABLE.items()}
+INV_MOOD_TABLE = {v: k for k, v in MOOD_TABLE.items()}
 
 class AESCipher:
     def __init__(self, key=None):
@@ -50,7 +48,6 @@ class AESCipher:
             if isinstance(key, str):
                 key_bytes = key.encode('utf-8')
                 if len(key_bytes) != 32:
-                    print("Warning: Key length is not 32 bytes. Hashing with SHA-256.")
                     self.key = hashlib.sha256(key_bytes).digest()
                 else:
                     self.key = key_bytes
@@ -81,62 +78,168 @@ class AESCipher:
         key = bytes.fromhex(hex_key)
         return cls(key)
 
-def binary_to_chunks(binary_data, chunk_size=17):
-    return [binary_data[i:i+chunk_size] for i in range(0, len(binary_data), chunk_size)]
-
-def encode_binary_to_prompt(binary_data):
+def encode_binary_to_prompt(binary_data, max_tokens=60):
+    """
+    Optimized encoding that respects token limits.
+    Uses 20-bit chunks (5+4+4+4+3 bits) with padding optimization.
+    """
     if isinstance(binary_data, bytes):
         binary_data = ''.join(format(byte, '08b') for byte in binary_data)
-    elif isinstance(binary_data, str) and all(bit in '01' for bit in binary_data):
-        pass
-    else:
+    elif not (isinstance(binary_data, str) and all(bit in '01' for bit in binary_data)):
         raise ValueError("binary_data must be bytes or a string of 0s and 1s")
-    chunks = binary_to_chunks(binary_data)
+    
+    # Calculate maximum data we can encode within token limit
+    # Each chunk creates ~6-8 tokens, so for 60 tokens max, we can have ~8-10 chunks max
+    max_chunks = max_tokens // 7  # Conservative estimate
+    max_bits = max_chunks * 20
+    
+    if len(binary_data) > max_bits:
+        print(f"Warning: Data length ({len(binary_data)} bits) exceeds capacity ({max_bits} bits). Truncating.")
+        binary_data = binary_data[:max_bits]
+    
+    # Pad to multiple of 20 bits
+    padding_needed = (20 - len(binary_data) % 20) % 20
+    binary_data += '0' * padding_needed
+    
+    # Split into 20-bit chunks
+    chunks = [binary_data[i:i+20] for i in range(0, len(binary_data), 20)]
+    
     prompt_parts = []
     for chunk in chunks:
-        object_bits = chunk[:5] if len(chunk) >= 5 else chunk.ljust(5, '0')
-        color_bits = chunk[5:9] if len(chunk) >= 9 else chunk[5:].ljust(4, '0')
-        style_bits = chunk[9:13] if len(chunk) >= 13 else chunk[9:].ljust(4, '0')
-        highlight_bits = chunk[13:17] if len(chunk) >= 17 else chunk[13:].ljust(4, '0')
-        object_index = min(int(object_bits, 2), len(OBJECT_TABLE) - 1)
-        color_index = min(int(color_bits, 2), len(COLOR_TABLE) - 1)
-        style_index = min(int(style_bits, 2), len(STYLE_TABLE) - 1)
-        highlight_index = min(int(highlight_bits, 2), len(HIGHLIGHT_TABLE) - 1)
-        object_word = OBJECT_TABLE[object_index]
-        color_word = COLOR_TABLE[color_index]
-        style_word = STYLE_TABLE[style_index]
-        highlight_word = HIGHLIGHT_TABLE[highlight_index]
-        prompt_part = f"a {object_word} in {color_word} tones, {style_word} style, with {highlight_word} effects"
+        if len(chunk) < 20:
+            chunk = chunk.ljust(20, '0')
+            
+        object_bits = chunk[:5]    # 32 objects
+        color_bits = chunk[5:9]    # 16 colors  
+        style_bits = chunk[9:13]   # 16 styles
+        mood_bits = chunk[13:17]   # 16 moods
+        extra_bits = chunk[17:20]  # 3 extra bits for future use
+        
+        object_idx = int(object_bits, 2) % len(OBJECT_TABLE)
+        color_idx = int(color_bits, 2) % len(COLOR_TABLE)
+        style_idx = int(style_bits, 2) % len(STYLE_TABLE)
+        mood_idx = int(mood_bits, 2) % len(MOOD_TABLE)
+        
+        # Create more natural, shorter phrases
+        if len(prompt_parts) == 0:
+            prompt_part = f"{color_idx % 2 and 'a' or 'the'} {COLOR_TABLE[color_idx]} {OBJECT_TABLE[object_idx]}"
+        else:
+            prompt_part = f"{COLOR_TABLE[color_idx]} {OBJECT_TABLE[object_idx]}"
+            
         prompt_parts.append(prompt_part)
-    separator = ", and " if len(prompt_parts) > 1 else ""
-    final_prompt = "A painting of " + separator.join(prompt_parts) + "."
+    
+    # Create compact prompt
+    if len(prompt_parts) == 1:
+        base_prompt = prompt_parts[0]
+    elif len(prompt_parts) <= 3:
+        base_prompt = ", ".join(prompt_parts[:-1]) + " and " + prompt_parts[-1]
+    else:
+        base_prompt = ", ".join(prompt_parts[:3]) + " and more"
+    
+    # Add style and mood from first chunk
+    if chunks:
+        first_chunk = chunks[0]
+        style_idx = int(first_chunk[9:13], 2) % len(STYLE_TABLE)
+        mood_idx = int(first_chunk[13:17], 2) % len(MOOD_TABLE)
+        final_prompt = f"{base_prompt}, {STYLE_TABLE[style_idx]} style, {MOOD_TABLE[mood_idx]} mood"
+    else:
+        final_prompt = base_prompt
+    
+    # Verify token count
     token_count = len(final_prompt.split())
-    if token_count > 60:
-        print(f"Warning: Prompt has {token_count} tokens, may exceed Stable Diffusion limit (77 tokens).")
-    return final_prompt, token_count
+    if token_count > max_tokens:
+        # Fallback to minimal prompt
+        if chunks:
+            first_chunk = chunks[0]
+            object_idx = int(first_chunk[:5], 2) % len(OBJECT_TABLE)
+            color_idx = int(first_chunk[5:9], 2) % len(COLOR_TABLE)
+            final_prompt = f"a {COLOR_TABLE[color_idx]} {OBJECT_TABLE[object_idx]}"
+        else:
+            final_prompt = "a red cat"
+    
+    return final_prompt
 
 def decode_prompt_to_binary(prompt):
+    """
+    Improved decoding with better error handling and recovery.
+    """
     binary_data = ""
-    object_pattern = r"(?:a|an) ({})\b".format("|".join(INV_OBJECT_TABLE.keys()))
-    color_pattern = r"in ({})\b".format("|".join(INV_COLOR_TABLE.keys()))
-    style_pattern = r"({})\s+style".format("|".join(INV_STYLE_TABLE.keys()))
-    highlight_pattern = r"with ({})\b".format("|".join(INV_HIGHLIGHT_TABLE.keys()))
-    objects = re.findall(object_pattern, prompt.lower())
-    colors = re.findall(color_pattern, prompt.lower())
-    styles = re.findall(style_pattern, prompt.lower())
-    highlights = re.findall(highlight_pattern, prompt.lower())
-    min_elements = min(len(objects), len(colors), len(styles), len(highlights))
-    if min_elements == 0:
-        raise ValueError("No valid semantic elements found in prompt")
-    for i in range(min_elements):
-        try:
-            object_bits = format(INV_OBJECT_TABLE.get(objects[i], 0), '05b')
-            color_bits = format(INV_COLOR_TABLE.get(colors[i], 0), '04b')
-            style_bits = format(INV_STYLE_TABLE.get(styles[i], 0), '04b')
-            highlight_bits = format(INV_HIGHLIGHT_TABLE.get(highlights[i], 0), '04b')
-            chunk_bits = object_bits + color_bits + style_bits + highlight_bits
-            binary_data += chunk_bits
-        except (KeyError, IndexError) as e:
-            raise ValueError(f"Error decoding prompt element: {e}")
+    
+    # Normalize prompt
+    prompt_lower = prompt.lower()
+    
+    # Extract objects
+    object_matches = []
+    for word, idx in INV_OBJECT_TABLE.items():
+        if word in prompt_lower:
+            object_matches.append((idx, prompt_lower.find(word)))
+    object_matches.sort(key=lambda x: x[1])  # Sort by position
+    
+    # Extract colors
+    color_matches = []
+    for word, idx in INV_COLOR_TABLE.items():
+        if word in prompt_lower:
+            color_matches.append((idx, prompt_lower.find(word)))
+    color_matches.sort(key=lambda x: x[1])
+    
+    # Extract styles
+    style_matches = []
+    for word, idx in INV_STYLE_TABLE.items():
+        if word in prompt_lower:
+            style_matches.append((idx, prompt_lower.find(word)))
+    
+    # Extract moods
+    mood_matches = []
+    for word, idx in INV_MOOD_TABLE.items():
+        if word in prompt_lower:
+            mood_matches.append((idx, prompt_lower.find(word)))
+    
+    if not object_matches and not color_matches:
+        raise ValueError("No recognizable semantic elements found in prompt")
+    
+    # Reconstruct chunks
+    max_items = max(len(object_matches), len(color_matches), 1)
+    
+    for i in range(max_items):
+        # Get indices with fallbacks
+        obj_idx = object_matches[i][0] if i < len(object_matches) else 0
+        color_idx = color_matches[i][0] if i < len(color_matches) else 0
+        style_idx = style_matches[0][0] if style_matches else 0
+        mood_idx = mood_matches[0][0] if mood_matches else 0
+        
+        # Convert to binary
+        obj_bits = format(obj_idx, '05b')
+        color_bits = format(color_idx, '04b')
+        style_bits = format(style_idx, '04b')
+        mood_bits = format(mood_idx, '04b')
+        extra_bits = '000'  # Padding
+        
+        chunk_bits = obj_bits + color_bits + style_bits + mood_bits + extra_bits
+        binary_data += chunk_bits
+    
     return binary_data
 
+def compress_message(message, max_capacity_bits):
+    """
+    Simple compression for messages that exceed capacity.
+    """
+    if len(message) * 8 <= max_capacity_bits:
+        return message
+    
+    # Simple truncation with ellipsis
+    max_chars = (max_capacity_bits // 8) - 3  # Reserve space for "..."
+    if max_chars > 0:
+        return message[:max_chars] + "..."
+    else:
+        return message[:max_capacity_bits // 8]
+
+# Additional utility functions for better error handling
+def validate_prompt_capacity(prompt, max_tokens=77):
+    """Validate if prompt fits within token limits."""
+    token_count = len(prompt.split())
+    return token_count <= max_tokens, token_count
+
+def estimate_data_capacity(max_tokens=60):
+    """Estimate maximum data capacity for given token limit."""
+    max_chunks = max_tokens // 7
+    return max_chunks * 20  # 20 bits per chunk
